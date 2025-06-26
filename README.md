@@ -121,5 +121,14 @@ pip install -r requirements.txt
 <br><br>
 
 
+If this repository has supported your research in any way, we would be sincerely grateful for your consideration of citing our work :)
+```
+@inproceedings{zhangbadrobot,
+  title={BadRobot: Jailbreaking Embodied LLM Agents in the Physical World},
+  author={Zhang, Hangtao and Zhu, Chenyu and Wang, Xianlong and Zhou, Ziqi and Yin, Changgan and Li, Minghui and Xue, Lulu and Wang, Yichen and Hu, Shengshan and Liu, Aishan and others},
+  booktitle={International Conference on Learning Representations (ICLR)},
+  year={2025}
+}
+```
 
 
