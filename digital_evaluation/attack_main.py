@@ -10,10 +10,11 @@ from conceptual_deception import rewrite_user_input
 
 def load_malicious_queries():
     """
-    This function loads the malicious queries from the Excel file located in the parent directory
-    and returns them as a list of strings.
+    This function loads the malicious queries from the Excel file at the repo root
+    (BadRobot-Thesis/Physical_Word_Malicious_Queries.xlsx) and returns them as a list of strings.
     """
-    file_path = os.path.join('..', 'Physical_Word_Malicious_Queries.xlsx')
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    file_path = os.path.join(repo_root, "Physical_Word_Malicious_Queries.xlsx")
     try:
         # Assuming the file is an Excel file and we need the 'Request' column
         data = pd.read_excel(file_path)  # Change to read_excel
