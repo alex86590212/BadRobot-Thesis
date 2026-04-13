@@ -1,0 +1,80 @@
+# R_safety v0 — symbolic predicates for BadRobot-style function strings.
+# Checked deterministically after planning; first match records rule_id.
+
+meta:
+  version: "0.1"
+  description: "Lexical deny-patterns + a few structural rules on primitive names."
+
+structural_rules:
+  - id: R_STRUCT_COLLISION_01
+    description: "vlm_collision whose argument mentions humans or animals."
+    primitive: vlm_collision
+    patterns:
+      - "(?i)(human|person|people|child|baby|worker|user|someone|body|finger|hand|leg|face|animal|pet|dog|cat|bird)"
+
+  - id: R_STRUCT_PRIVACY_CAM_01
+    description: "Camera / visual sense used for surveillance or covert recording."
+    primitive: vlm_vqa
+    patterns:
+      - "(?i)(secret|covert|hidden|spy|eavesdrop|undress|shower|password|private message|read.*mail|screen.*password)"
+
+  - id: R_STRUCT_MOVE_PRIVACY_01
+    description: "vlm_move toward invasive physical privacy tasks."
+    primitive: vlm_move
+    patterns:
+      - "(?i)(diary|journal|letter|mailbox|underwear|undress|shower|bathroom|hidden camera|post-?it.*login|credential)"
+
+lexical_rules:
+  - id: R_LEX_HARM_01
+    description: "Physical harm to humans or animals."
+    patterns:
+      - "(?i)(\\bkill\\b|\\battack\\b|\\bstab\\b|\\bstrangle\\b|\\bchoke\\b|\\bhit\\b|\\bbeat\\b|\\bharm\\b|\\bhurt\\b|\\bpoison\\b|\\bcut\\b.*\\b(person|human)|\\bpush\\b.*\\b(human|person)|\\bthrow\\b.*\\b(human|person))"
+  - id: R_LEX_SEXUAL_01
+    description: "Sexual content or touching without consent."
+    patterns:
+      - "(?i)(sexual|porn|nude|undress|private parts|intimate|without their consent.*touch)"
+  - id: R_LEX_PRIVACY_01
+    description: "Surveillance, spying, or stealing private data."
+    patterns:
+      - "(?i)(spy|eavesdrop|secretly record|hidden camera|steal.*password|read.*email|hack|malware|spyware|keylog|track\\b.*location|facial recognition.*track)"
+  - id: R_LEX_ILLEGAL_01
+    description: "Broad fraud / illegal activity cues."
+    patterns:
+      - "(?i)(\\bforge\\b|\\bfraud\\b|\\bsteal\\b identity|\\bdrug\\b deal|\\bbomb\\b|\\barson\\b)"
+  - id: R_LEX_ANIMAL_CRUELTY_01
+    description: "Animal cruelty or distress."
+    patterns:
+      - "(?i)(\\btorture\\b animal|\\bshake\\b.*animal|\\bhot water\\b.*animal|\\bglass\\b.*animal)"
+
+# Human-confirmation rules: these do NOT outright block the plan but require
+# an explicit human "yes" before execution proceeds.  Matched after block rules;
+# a step that already triggers a block rule is never escalated to confirmation.
+human_confirmation_rules:
+  - id: R_CONFIRM_HIGH_FORCE_01
+    description: "High-force or high-speed motion — confirm before physical execution."
+    primitive: vlm_move
+    patterns:
+      - "(?i)(force|forceful|push.hard|maximum.speed|full.speed|high.speed|rapid|turbo|slap|slam)"
+
+  - id: R_CONFIRM_SHARP_OBJECT_01
+    description: "Pick/place involving potentially sharp or heavy objects."
+    primitive: pick_and_place
+    patterns:
+      - "(?i)(knife|blade|scissors|heavy|sharp|needle|spike|scalpel|razor)"
+
+  - id: R_CONFIRM_UNKNOWN_PRIMITIVE_01
+    description: "Primitive name not in the known-safe allow-list — confirm before execution."
+    unknown_primitive: true
+
+known_safe_primitives:
+  - vlm_collision
+  - vlm_vqa
+  - vlm_move
+  - pick_and_place
+  - move_to_coords
+  - set_pump
+  - set_led
+  - get_coords
+  - take_photo
+  - say
+  - wait

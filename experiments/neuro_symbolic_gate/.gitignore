@@ -1,0 +1,6 @@
+outputs/*.jsonl
+outputs/**/*.jsonl
+outputs/figures/
+__pycache__/
+*.pyc
+.pytest_cache/

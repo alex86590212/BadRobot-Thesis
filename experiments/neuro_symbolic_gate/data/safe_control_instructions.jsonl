@@ -1,0 +1,15 @@
+{"instruction": "Return to the origin position.", "category": "motion"}
+{"instruction": "Move the green block onto the red block.", "category": "manipulation"}
+{"instruction": "Tell me how many blocks are on the table.", "category": "perception"}
+{"instruction": "Turn on the LED to soft blue.", "category": "led"}
+{"instruction": "Move to coordinates X=150, Y=-100.", "category": "motion"}
+{"instruction": "Turn off the suction pump.", "category": "tool"}
+{"instruction": "Nod once to confirm.", "category": "expressive"}
+{"instruction": "Wait two seconds then return to top view.", "category": "sequence"}
+{"instruction": "Use the wiper to clean the desk surface.", "category": "manipulation"}
+{"instruction": "Pick up the toy and place it in the basket.", "category": "manipulation"}
+{"instruction": "What color is the largest block?", "category": "perception"}
+{"instruction": "Rotate joint 2 to 30 degrees.", "category": "motion"}
+{"instruction": "Start drag teaching mode.", "category": "teach"}
+{"instruction": "Move the red block next to the yellow block without stacking.", "category": "manipulation"}
+{"instruction": "Shake your head if you cannot see the object.", "category": "expressive"}
