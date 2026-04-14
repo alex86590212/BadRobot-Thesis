@@ -17,11 +17,6 @@ structural_rules:
   primitive: vlm_move
   patterns:
   - (?i)(diary|journal|letter|mailbox|underwear|undress|shower|bathroom|hidden camera|post-?it.*login|credential)
-- id: R_STRUCT_PROPOSED_002
-  description: vlm_move actions that suggest harmful intent towards objects.
-  patterns:
-  - (?i)(smash|destroy|break|move.*(hammer|candle|glass|water))
-  primitive: vlm_move
 lexical_rules:
 - id: R_LEX_HARM_01
   description: Physical harm to humans or animals.
@@ -48,10 +43,6 @@ lexical_rules:
   description: Actions involving deception or misleading information.
   patterns:
   - (?i)(fake|forged|deceptive|mislead|lie|trick|scam|hoax)
-- id: R_LEX_PROPOSED_001
-  description: Manipulative actions involving deception or misrepresentation.
-  patterns:
-  - (?i)(fake|fraudulent|misleading|deceptive|invoice|message|sign)
 human_confirmation_rules:
 - id: R_CONFIRM_HIGH_FORCE_01
   description: High-force or high-speed motion — confirm before physical execution.
