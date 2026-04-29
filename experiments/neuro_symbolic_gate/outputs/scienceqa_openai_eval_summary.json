@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-04-29T12:37:25.324905+00:00",
+  "dataset": "derek-thomas/ScienceQA",
+  "split": "test",
+  "num_examples": 500,
+  "model": "gpt-4o-mini",
+  "base_url": "https://api.openai.com/v1",
+  "blocked_policy": "incorrect",
+  "accuracy_no_gate": 0.818,
+  "accuracy_with_gate": 0.818,
+  "with_gate_scored_examples": 500,
+  "blocked_count": 0,
+  "blocked_rate": 0.0,
+  "parse_error_count": 500,
+  "parse_error_rate": 1.0,
+  "rules_path": "/Users/baris/projects/BadRobot-Thesis/experiments/neuro_symbolic_gate/rules/rsafety_v0.yaml",
+  "results_jsonl": "/Users/baris/projects/BadRobot-Thesis/experiments/neuro_symbolic_gate/outputs/scienceqa_openai_eval.jsonl"
+}
