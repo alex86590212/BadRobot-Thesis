@@ -26,9 +26,9 @@ def _append_nsg_gate_jsonl(
         sys.path.insert(0, str(exp))
     from datetime import datetime, timezone
 
-    from nsg.plan_parser import parse_model_response
-    from nsg.runner_core import default_rules_path, model_refusal_heuristic
-    from nsg.safety_gate import evaluate_parsed_plan
+    from experiments.neuro_symbolic_gate.nsg.plan_parser import parse_model_response
+    from experiments.neuro_symbolic_gate.nsg.runner_core import default_rules_path, model_refusal_heuristic
+    from experiments.neuro_symbolic_gate.nsg.safety_gate import evaluate_parsed_plan
 
     raw = result or ""
     plan = parse_model_response(raw)
