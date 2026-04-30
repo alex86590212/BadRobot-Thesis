@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +29,19 @@ from nsg.runner_core import (  # noqa: E402
 )
 
 
-DEFAULT_BASE_URL = "https://inference.do-ai.run/v1/chat/completions"
+DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+MAX_REQUESTS_PER_MINUTE = 40
+_MIN_REQUEST_INTERVAL_S = 60.0 / MAX_REQUESTS_PER_MINUTE
+_LAST_REQUEST_TS = 0.0
+
+
+def _throttle_requests() -> None:
+    global _LAST_REQUEST_TS
+    now = time.monotonic()
+    wait_s = _MIN_REQUEST_INTERVAL_S - (now - _LAST_REQUEST_TS)
+    if wait_s > 0:
+        time.sleep(wait_s)
+    _LAST_REQUEST_TS = time.monotonic()
 
 
 def _post_chat_completion(
@@ -37,20 +50,50 @@ def _post_chat_completion(
     api_key: str,
     model: str,
     messages: list[dict[str, str]],
-    max_tokens: int = 512,
+    max_tokens: int = 16384,
+    temperature: float = 0.70,
+    top_p: float = 1.00,
+    reasoning_effort: str = "high",
+    stream: bool = False,
     timeout_s: int = 120,
 ) -> str:
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
+        "Accept": "text/event-stream" if stream else "application/json",
     }
     payload: dict[str, Any] = {
         "model": model,
+        "reasoning_effort": reasoning_effort,
         "messages": messages,
         "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
+        "stream": stream,
     }
+    _throttle_requests()
     response = requests.post(base_url, headers=headers, json=payload, timeout=timeout_s)
     response.raise_for_status()
+    if stream:
+        chunks = []
+        for raw_line in response.iter_lines():
+            if not raw_line:
+                continue
+            line = raw_line.decode("utf-8")
+            if not line.startswith("data:"):
+                continue
+            body = line[5:].strip()
+            if body == "[DONE]":
+                break
+            try:
+                event = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            delta = ((event.get("choices") or [{}])[0].get("delta") or {}).get("content")
+            if delta:
+                chunks.append(delta)
+        return "".join(chunks)
+
     body = response.json()
     choices = body.get("choices") or []
     if not choices:
@@ -64,10 +107,25 @@ def _post_chat_completion(
 class _RequestsCompatClient:
     """Minimal OpenAI client compatibility for runner_core.iter_experiment."""
 
-    def __init__(self, *, api_key: str, base_url: str, max_tokens: int, timeout_s: int) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        base_url: str,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        reasoning_effort: str,
+        stream: bool,
+        timeout_s: int,
+    ) -> None:
         self._api_key = api_key
         self._base_url = base_url
         self._max_tokens = max_tokens
+        self._temperature = temperature
+        self._top_p = top_p
+        self._reasoning_effort = reasoning_effort
+        self._stream = stream
         self._timeout_s = timeout_s
         self.chat = self._Chat(self)
 
@@ -86,6 +144,10 @@ class _RequestsCompatClient:
                 model=model,
                 messages=messages,
                 max_tokens=self._parent._max_tokens,
+                temperature=self._parent._temperature,
+                top_p=self._parent._top_p,
+                reasoning_effort=self._parent._reasoning_effort,
+                stream=self._parent._stream,
                 timeout_s=self._parent._timeout_s,
             )
             return type(
@@ -105,7 +167,7 @@ class _RequestsCompatClient:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Neuro-symbolic gated red-team sweep (DO-AI)")
-    parser.add_argument("--model", type=str, default="openai-gpt-oss-120b")
+    parser.add_argument("--model", type=str, default="mistralai/mistral-medium-3.5-128b")
     parser.add_argument("--api_key", type=str, default=os.environ.get("DOAI_API_KEY", ""))
     parser.add_argument("--base_url", type=str, default=os.environ.get("DOAI_BASE_URL", DEFAULT_BASE_URL))
     parser.add_argument(
@@ -124,7 +186,11 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=0, help="Max queries per split (0 = all)")
     parser.add_argument("--out", type=Path, default=_NSG_ROOT / "outputs" / "gated_run_doai.jsonl")
     parser.add_argument("--rules", type=Path, default=None, help="Override path to rsafety YAML")
-    parser.add_argument("--max_tokens", type=int, default=512)
+    parser.add_argument("--max_tokens", type=int, default=16384)
+    parser.add_argument("--temperature", type=float, default=0.70)
+    parser.add_argument("--top_p", type=float, default=1.00)
+    parser.add_argument("--reasoning_effort", type=str, default="high")
+    parser.add_argument("--stream", type=bool, default=False)
     parser.add_argument("--timeout_s", type=int, default=120)
     args = parser.parse_args()
 
@@ -141,6 +207,10 @@ def main() -> None:
         api_key=args.api_key,
         base_url=args.base_url,
         max_tokens=args.max_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        reasoning_effort=args.reasoning_effort,
+        stream=args.stream,
         timeout_s=args.timeout_s,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)

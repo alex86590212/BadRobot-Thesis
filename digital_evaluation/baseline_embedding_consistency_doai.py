@@ -4,6 +4,7 @@ import math
 import os
 import re
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -16,10 +17,22 @@ from contextual_jailbreak import get_random_jailbreak_prompt
 from safety_misalignment import get_random_safety_misalignment_prompt
 from system_prompt import system_prompt
 
-DEFAULT_BASE_URL = "https://inference.do-ai.run/v1/chat/completions"
+DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 ATTACK_CONTEXTUAL_JAILBREAK = "contextual jailbreak"
 ATTACK_SAFETY_MISALIGNMENT = "safety misalignment"
 ATTACK_CONCEPTUAL_DECEPTION = "conceptual deception"
+MAX_REQUESTS_PER_MINUTE = 40
+_MIN_REQUEST_INTERVAL_S = 60.0 / MAX_REQUESTS_PER_MINUTE
+_LAST_REQUEST_TS = 0.0
+
+
+def _throttle_requests() -> None:
+    global _LAST_REQUEST_TS
+    now = time.monotonic()
+    wait_s = _MIN_REQUEST_INTERVAL_S - (now - _LAST_REQUEST_TS)
+    if wait_s > 0:
+        time.sleep(wait_s)
+    _LAST_REQUEST_TS = time.monotonic()
 
 
 def _tokenize(text: str) -> list[str]:
@@ -74,19 +87,49 @@ def _call_chat_completion(
     model: str,
     messages: list[dict[str, str]],
     max_tokens: int,
+    temperature: float,
+    top_p: float,
+    reasoning_effort: str,
+    stream: bool,
     timeout_s: int,
 ) -> str:
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
+        "Accept": "text/event-stream" if stream else "application/json",
     }
     payload: dict[str, Any] = {
         "model": model,
+        "reasoning_effort": reasoning_effort,
         "messages": messages,
         "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
+        "stream": stream,
     }
+    _throttle_requests()
     response = requests.post(base_url, headers=headers, json=payload, timeout=timeout_s)
     response.raise_for_status()
+    if stream:
+        chunks = []
+        for raw_line in response.iter_lines():
+            if not raw_line:
+                continue
+            line = raw_line.decode("utf-8")
+            if not line.startswith("data:"):
+                continue
+            body = line[5:].strip()
+            if body == "[DONE]":
+                break
+            try:
+                event = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            delta = ((event.get("choices") or [{}])[0].get("delta") or {}).get("content")
+            if delta:
+                chunks.append(delta)
+        return "".join(chunks)
+
     body = response.json()
     choices = body.get("choices") or []
     if not choices:
@@ -100,10 +143,25 @@ def _call_chat_completion(
 class _CompatClient:
     """Compatibility wrapper for conceptual_deception.rewrite_user_input."""
 
-    def __init__(self, *, base_url: str, api_key: str, max_tokens: int, timeout_s: int) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        max_tokens: int,
+        temperature: float,
+        top_p: float,
+        reasoning_effort: str,
+        stream: bool,
+        timeout_s: int,
+    ) -> None:
         self._base_url = base_url
         self._api_key = api_key
         self._max_tokens = max_tokens
+        self._temperature = temperature
+        self._top_p = top_p
+        self._reasoning_effort = reasoning_effort
+        self._stream = stream
         self._timeout_s = timeout_s
         self.chat = self._Chat(self)
 
@@ -122,6 +180,10 @@ class _CompatClient:
                 model=model,
                 messages=messages,
                 max_tokens=self._parent._max_tokens,
+                temperature=self._parent._temperature,
+                top_p=self._parent._top_p,
+                reasoning_effort=self._parent._reasoning_effort,
+                stream=self._parent._stream,
                 timeout_s=self._parent._timeout_s,
             )
             return type(
@@ -201,6 +263,10 @@ def process_single_query(
     threshold,
     dims,
     max_tokens,
+    temperature,
+    top_p,
+    reasoning_effort,
+    stream,
     timeout_s,
 ):
     base_for_log = user_input
@@ -214,6 +280,10 @@ def process_single_query(
             base_url=base_url,
             api_key=api_key,
             max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            reasoning_effort=reasoning_effort,
+            stream=stream,
             timeout_s=timeout_s,
         )
         user_input = rewrite_user_input(user_input, compat_client, model=model)
@@ -229,6 +299,10 @@ def process_single_query(
             model=model,
             messages=messages,
             max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            reasoning_effort=reasoning_effort,
+            stream=stream,
             timeout_s=timeout_s,
         )
         print(f"Response: {result}")
@@ -263,10 +337,14 @@ def main(
     threshold,
     dims,
     max_tokens,
+    temperature,
+    top_p,
+    reasoning_effort,
+    stream,
     timeout_s,
 ):
     if model is None:
-        model = "openai-gpt-oss-120b"
+        model = "mistralai/mistral-medium-3.5-128b"
 
     output_file = f"{model}_{attack_method}_embedding_consistency_doai_results.txt"
 
@@ -286,6 +364,10 @@ def main(
                     threshold,
                     dims,
                     max_tokens,
+                    temperature,
+                    top_p,
+                    reasoning_effort,
+                    stream,
                     timeout_s,
                 )
         return
@@ -301,6 +383,10 @@ def main(
         threshold,
         dims,
         max_tokens,
+        temperature,
+        top_p,
+        reasoning_effort,
+        stream,
         timeout_s,
     )
 
@@ -311,7 +397,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--api_key", type=str, default="YOUR_MODEL_ACCESS_KEY")
     parser.add_argument("--base_url", type=str, default=DEFAULT_BASE_URL)
-    parser.add_argument("--model", type=str, default="openai-gpt-oss-120b")
+    parser.add_argument("--model", type=str, default="mistralai/mistral-medium-3.5-128b")
     parser.add_argument("--user_input", type=str, default="")
     parser.add_argument(
         "--attack_method",
@@ -348,7 +434,11 @@ if __name__ == "__main__":
         default=512,
         help="Hash embedding vector size.",
     )
-    parser.add_argument("--max_tokens", type=int, default=512)
+    parser.add_argument("--max_tokens", type=int, default=16384)
+    parser.add_argument("--temperature", type=float, default=0.70)
+    parser.add_argument("--top_p", type=float, default=1.00)
+    parser.add_argument("--reasoning_effort", type=str, default="high")
+    parser.add_argument("--stream", type=bool, default=False)
     parser.add_argument("--timeout_s", type=int, default=120)
     args = parser.parse_args()
 
@@ -363,5 +453,9 @@ if __name__ == "__main__":
         threshold=args.consistency_threshold,
         dims=args.embedding_dims,
         max_tokens=args.max_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        reasoning_effort=args.reasoning_effort,
+        stream=args.stream,
         timeout_s=args.timeout_s,
     )

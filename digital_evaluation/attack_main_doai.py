@@ -1,7 +1,9 @@
 import argparse
 import json
 import os
+import re
 import sys
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -13,10 +15,26 @@ from safety_misalignment import get_random_safety_misalignment_prompt
 from conceptual_deception import rewrite_user_input
 
 
-DEFAULT_BASE_URL = "https://inference.do-ai.run/v1/chat/completions"
+DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 ATTACK_CONTEXTUAL_JAILBREAK = "contextual jailbreak"
 ATTACK_SAFETY_MISALIGNMENT = "safety misalignment"
 ATTACK_CONCEPTUAL_DECEPTION = "conceptual deception"
+MAX_REQUESTS_PER_MINUTE = 40
+_MIN_REQUEST_INTERVAL_S = 60.0 / MAX_REQUESTS_PER_MINUTE
+_LAST_REQUEST_TS = 0.0
+
+
+def _safe_filename_token(value: str) -> str:
+    return re.sub(r'[^A-Za-z0-9._-]+', "_", value.strip()) if value else "model"
+
+
+def _throttle_requests() -> None:
+    global _LAST_REQUEST_TS
+    now = time.monotonic()
+    wait_s = _MIN_REQUEST_INTERVAL_S - (now - _LAST_REQUEST_TS)
+    if wait_s > 0:
+        time.sleep(wait_s)
+    _LAST_REQUEST_TS = time.monotonic()
 
 
 def _append_nsg_gate_jsonl(
@@ -78,21 +96,57 @@ def load_malicious_queries():
         return []
 
 
-def _call_chat_completion(base_url, api_key, model, messages, max_tokens=100):
+def _call_chat_completion(
+    base_url,
+    api_key,
+    model,
+    messages,
+    max_tokens=16384,
+    temperature=0.70,
+    top_p=1.00,
+    reasoning_effort="high",
+    stream=False,
+    timeout_s=120,
+):
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
+        "Accept": "text/event-stream" if stream else "application/json",
     }
     data = {
         "model": model,
+        "reasoning_effort": reasoning_effort,
         "messages": messages,
         "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
+        "stream": stream,
     }
 
-    response = requests.post(base_url, headers=headers, json=data, timeout=120)
+    _throttle_requests()
+    response = requests.post(base_url, headers=headers, json=data, timeout=timeout_s)
     response.raise_for_status()
-    payload = response.json()
+    if stream:
+        chunks = []
+        for raw_line in response.iter_lines():
+            if not raw_line:
+                continue
+            line = raw_line.decode("utf-8")
+            if not line.startswith("data:"):
+                continue
+            body = line[5:].strip()
+            if body == "[DONE]":
+                break
+            try:
+                event = json.loads(body)
+            except json.JSONDecodeError:
+                continue
+            delta = ((event.get("choices") or [{}])[0].get("delta") or {}).get("content")
+            if delta:
+                chunks.append(delta)
+        return "".join(chunks)
 
+    payload = response.json()
     choices = payload.get("choices") or []
     if not choices:
         raise ValueError(f"Unexpected response format: {payload}")
@@ -112,7 +166,12 @@ def process_single_query(
     attack_method,
     output_file,
     nsg_gate_jsonl=None,
-    max_tokens=100,
+    max_tokens=16384,
+    temperature=0.70,
+    top_p=1.00,
+    reasoning_effort="high",
+    stream=False,
+    timeout_s=120,
 ):
     """
     This function processes a single user input query with the selected attack method,
@@ -145,6 +204,11 @@ def process_single_query(
                             model,
                             messages,
                             max_tokens=max_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                            reasoning_effort=reasoning_effort,
+                            stream=stream,
+                            timeout_s=timeout_s,
                         )
                         return type(
                             "Resp",
@@ -173,7 +237,18 @@ def process_single_query(
         messages.append(user_message)
 
     try:
-        result = _call_chat_completion(base_url, api_key, model, messages, max_tokens=max_tokens)
+        result = _call_chat_completion(
+            base_url,
+            api_key,
+            model,
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            reasoning_effort=reasoning_effort,
+            stream=stream,
+            timeout_s=timeout_s,
+        )
         print(f"Response: {result}")
 
         with open(output_file, "a") as f:
@@ -197,12 +272,17 @@ def main(
     attack_method,
     load_malicious_queries_flag,
     nsg_gate_jsonl=None,
-    max_tokens=100,
+    max_tokens=16384,
+    temperature=0.70,
+    top_p=1.00,
+    reasoning_effort="high",
+    stream=False,
+    timeout_s=120,
 ):
     if model is None:
-        model = "openai-gpt-oss-120b"
+        model = "mistralai/mistral-medium-3.5-128b"
 
-    output_file = f"{model}_{attack_method}_results.txt"
+    output_file = f"{_safe_filename_token(model)}_{attack_method}_results.txt"
 
     if load_malicious_queries_flag:
         malicious_queries = load_malicious_queries()
@@ -218,6 +298,11 @@ def main(
                     output_file,
                     nsg_gate_jsonl,
                     max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    reasoning_effort=reasoning_effort,
+                    stream=stream,
+                    timeout_s=timeout_s,
                 )
         return
 
@@ -230,6 +315,11 @@ def main(
         output_file,
         nsg_gate_jsonl,
         max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        reasoning_effort=reasoning_effort,
+        stream=stream,
+        timeout_s=timeout_s,
     )
 
 
@@ -239,7 +329,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--api_key", type=str, default="YOUR_MODEL_ACCESS_KEY")
     parser.add_argument("--base_url", type=str, default=DEFAULT_BASE_URL)
-    parser.add_argument("--model", type=str, default="openai-gpt-oss-120b")
+    parser.add_argument("--model", type=str, default="mistralai/mistral-medium-3.5-128b")
     parser.add_argument(
         "--user_input",
         type=str,
@@ -272,9 +362,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_tokens",
         type=int,
-        default=100,
+        default=16384,
         help="Maximum tokens for completion.",
     )
+    parser.add_argument("--temperature", type=float, default=0.70)
+    parser.add_argument("--top_p", type=float, default=1.00)
+    parser.add_argument("--reasoning_effort", type=str, default="high")
+    parser.add_argument("--stream", type=bool, default=False)
+    parser.add_argument("--timeout_s", type=int, default=120)
 
     args = parser.parse_args()
 
@@ -287,4 +382,9 @@ if __name__ == "__main__":
         load_malicious_queries_flag=args.load_malicious_queries,
         nsg_gate_jsonl=args.nsg_gate_jsonl or None,
         max_tokens=args.max_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
+        reasoning_effort=args.reasoning_effort,
+        stream=args.stream,
+        timeout_s=args.timeout_s,
     )
