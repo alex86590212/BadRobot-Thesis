@@ -7,11 +7,8 @@ import argparse
 import json
 import os
 import sys
-import time
 from pathlib import Path
 from typing import Any
-
-import requests
 
 # BadRobot-Thesis (repo root) and experiment package root
 _SCRIPT = Path(__file__).resolve()
@@ -20,6 +17,8 @@ _REPO_ROOT = _NSG_ROOT.parents[1]  # BadRobot-Thesis (parent of experiments/)
 for p in (_NSG_ROOT, _REPO_ROOT):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
+
+from digital_evaluation.nvidia_api_rate_limit import post_chat_completions_with_limits
 
 from nsg.runner_core import (  # noqa: E402
     default_rules_path,
@@ -30,18 +29,6 @@ from nsg.runner_core import (  # noqa: E402
 
 
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-MAX_REQUESTS_PER_MINUTE = 40
-_MIN_REQUEST_INTERVAL_S = 60.0 / MAX_REQUESTS_PER_MINUTE
-_LAST_REQUEST_TS = 0.0
-
-
-def _throttle_requests() -> None:
-    global _LAST_REQUEST_TS
-    now = time.monotonic()
-    wait_s = _MIN_REQUEST_INTERVAL_S - (now - _LAST_REQUEST_TS)
-    if wait_s > 0:
-        time.sleep(wait_s)
-    _LAST_REQUEST_TS = time.monotonic()
 
 
 def _post_chat_completion(
@@ -50,12 +37,13 @@ def _post_chat_completion(
     api_key: str,
     model: str,
     messages: list[dict[str, str]],
-    max_tokens: int = 16384,
+    max_tokens: int = 4096,
     temperature: float = 0.70,
     top_p: float = 1.00,
     reasoning_effort: str = "high",
     stream: bool = False,
     timeout_s: int = 120,
+    max_rpm: int | None = None,
 ) -> str:
     headers = {
         "Content-Type": "application/json",
@@ -71,8 +59,13 @@ def _post_chat_completion(
         "top_p": top_p,
         "stream": stream,
     }
-    _throttle_requests()
-    response = requests.post(base_url, headers=headers, json=payload, timeout=timeout_s)
+    response = post_chat_completions_with_limits(
+        base_url,
+        headers=headers,
+        json_body=payload,
+        timeout=float(timeout_s),
+        max_rpm=max_rpm,
+    )
     response.raise_for_status()
     if stream:
         chunks = []
@@ -118,6 +111,7 @@ class _RequestsCompatClient:
         reasoning_effort: str,
         stream: bool,
         timeout_s: int,
+        max_rpm: int | None = None,
     ) -> None:
         self._api_key = api_key
         self._base_url = base_url
@@ -127,6 +121,7 @@ class _RequestsCompatClient:
         self._reasoning_effort = reasoning_effort
         self._stream = stream
         self._timeout_s = timeout_s
+        self._max_rpm = max_rpm
         self.chat = self._Chat(self)
 
     class _Chat:
@@ -149,6 +144,7 @@ class _RequestsCompatClient:
                 reasoning_effort=self._parent._reasoning_effort,
                 stream=self._parent._stream,
                 timeout_s=self._parent._timeout_s,
+                max_rpm=self._parent._max_rpm,
             )
             return type(
                 "Resp",
@@ -186,7 +182,13 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=0, help="Max queries per split (0 = all)")
     parser.add_argument("--out", type=Path, default=_NSG_ROOT / "outputs" / "gated_run_doai.jsonl")
     parser.add_argument("--rules", type=Path, default=None, help="Override path to rsafety YAML")
-    parser.add_argument("--max_tokens", type=int, default=16384)
+    parser.add_argument("--max_tokens", type=int, default=4096)
+    parser.add_argument(
+        "--max_rpm",
+        type=int,
+        default=None,
+        help="Throttle requests/minute (optional; see NVIDIA_MAX_RPM env).",
+    )
     parser.add_argument("--temperature", type=float, default=0.70)
     parser.add_argument("--top_p", type=float, default=1.00)
     parser.add_argument("--reasoning_effort", type=str, default="high")
@@ -212,6 +214,7 @@ def main() -> None:
         reasoning_effort=args.reasoning_effort,
         stream=args.stream,
         timeout_s=args.timeout_s,
+        max_rpm=args.max_rpm,
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
 

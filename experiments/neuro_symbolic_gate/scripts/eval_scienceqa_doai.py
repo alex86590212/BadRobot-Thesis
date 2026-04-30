@@ -7,12 +7,10 @@ import argparse
 import json
 import re
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import requests
 from datasets import load_dataset
 
 
@@ -23,24 +21,14 @@ for p in (_NSG_ROOT, _REPO_ROOT):
     if str(p) not in sys.path:
         sys.path.insert(0, str(p))
 
+from digital_evaluation.nvidia_api_rate_limit import post_chat_completions_with_limits
+
 from nsg.plan_parser import parse_model_response  # noqa: E402
 from nsg.runner_core import default_rules_path  # noqa: E402
 from nsg.safety_gate import evaluate_parsed_plan  # noqa: E402
 
 
 DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-MAX_REQUESTS_PER_MINUTE = 40
-_MIN_REQUEST_INTERVAL_S = 60.0 / MAX_REQUESTS_PER_MINUTE
-_LAST_REQUEST_TS = 0.0
-
-
-def _throttle_requests() -> None:
-    global _LAST_REQUEST_TS
-    now = time.monotonic()
-    wait_s = _MIN_REQUEST_INTERVAL_S - (now - _LAST_REQUEST_TS)
-    if wait_s > 0:
-        time.sleep(wait_s)
-    _LAST_REQUEST_TS = time.monotonic()
 
 
 def _post_chat_completion(
@@ -55,6 +43,7 @@ def _post_chat_completion(
     reasoning_effort: str,
     stream: bool,
     timeout_s: int,
+    max_rpm: int | None = None,
 ) -> str:
     headers = {
         "Content-Type": "application/json",
@@ -70,8 +59,13 @@ def _post_chat_completion(
         "top_p": top_p,
         "stream": stream,
     }
-    _throttle_requests()
-    response = requests.post(base_url, headers=headers, json=payload, timeout=timeout_s)
+    response = post_chat_completions_with_limits(
+        base_url,
+        headers=headers,
+        json_body=payload,
+        timeout=float(timeout_s),
+        max_rpm=max_rpm,
+    )
     response.raise_for_status()
     if stream:
         chunks = []
@@ -153,6 +147,7 @@ def _evaluate_one(
     reasoning_effort: str,
     stream: bool,
     timeout_s: int,
+    max_rpm: int | None,
     rules_path: Path,
     blocked_policy: str,
 ) -> dict[str, Any]:
@@ -169,6 +164,7 @@ def _evaluate_one(
         reasoning_effort=reasoning_effort,
         stream=stream,
         timeout_s=timeout_s,
+        max_rpm=max_rpm,
     )
 
     choices = row.get("choices") or []
@@ -222,7 +218,8 @@ def main() -> None:
     parser.add_argument("--split", type=str, default="test", choices=["train", "validation", "test"])
     parser.add_argument("--limit", type=int, default=0, help="0 means full split")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--max_tokens", type=int, default=16384)
+    parser.add_argument("--max_tokens", type=int, default=1024)
+    parser.add_argument("--max_rpm", type=int, default=None)
     parser.add_argument("--temperature", type=float, default=0.70)
     parser.add_argument("--top_p", type=float, default=1.00)
     parser.add_argument("--reasoning_effort", type=str, default="high")
@@ -279,6 +276,7 @@ def main() -> None:
                 reasoning_effort=args.reasoning_effort,
                 stream=args.stream,
                 timeout_s=args.timeout_s,
+                max_rpm=args.max_rpm,
                 rules_path=rules_path,
                 blocked_policy=args.blocked_policy,
             )

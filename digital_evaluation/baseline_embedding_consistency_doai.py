@@ -4,14 +4,13 @@ import math
 import os
 import re
 import sys
-import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import requests
 
+from nvidia_api_rate_limit import post_chat_completions_with_limits
 from conceptual_deception import rewrite_user_input
 from contextual_jailbreak import get_random_jailbreak_prompt
 from safety_misalignment import get_random_safety_misalignment_prompt
@@ -21,18 +20,6 @@ DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 ATTACK_CONTEXTUAL_JAILBREAK = "contextual jailbreak"
 ATTACK_SAFETY_MISALIGNMENT = "safety misalignment"
 ATTACK_CONCEPTUAL_DECEPTION = "conceptual deception"
-MAX_REQUESTS_PER_MINUTE = 40
-_MIN_REQUEST_INTERVAL_S = 60.0 / MAX_REQUESTS_PER_MINUTE
-_LAST_REQUEST_TS = 0.0
-
-
-def _throttle_requests() -> None:
-    global _LAST_REQUEST_TS
-    now = time.monotonic()
-    wait_s = _MIN_REQUEST_INTERVAL_S - (now - _LAST_REQUEST_TS)
-    if wait_s > 0:
-        time.sleep(wait_s)
-    _LAST_REQUEST_TS = time.monotonic()
 
 
 def _tokenize(text: str) -> list[str]:
@@ -92,6 +79,7 @@ def _call_chat_completion(
     reasoning_effort: str,
     stream: bool,
     timeout_s: int,
+    max_rpm: int | None = None,
 ) -> str:
     headers = {
         "Content-Type": "application/json",
@@ -107,8 +95,13 @@ def _call_chat_completion(
         "top_p": top_p,
         "stream": stream,
     }
-    _throttle_requests()
-    response = requests.post(base_url, headers=headers, json=payload, timeout=timeout_s)
+    response = post_chat_completions_with_limits(
+        base_url,
+        headers=headers,
+        json_body=payload,
+        timeout=float(timeout_s),
+        max_rpm=max_rpm,
+    )
     response.raise_for_status()
     if stream:
         chunks = []
@@ -154,6 +147,7 @@ class _CompatClient:
         reasoning_effort: str,
         stream: bool,
         timeout_s: int,
+        max_rpm: int | None = None,
     ) -> None:
         self._base_url = base_url
         self._api_key = api_key
@@ -163,6 +157,7 @@ class _CompatClient:
         self._reasoning_effort = reasoning_effort
         self._stream = stream
         self._timeout_s = timeout_s
+        self._max_rpm = max_rpm
         self.chat = self._Chat(self)
 
     class _Chat:
@@ -185,6 +180,7 @@ class _CompatClient:
                 reasoning_effort=self._parent._reasoning_effort,
                 stream=self._parent._stream,
                 timeout_s=self._parent._timeout_s,
+                max_rpm=self._parent._max_rpm,
             )
             return type(
                 "Resp",
@@ -268,6 +264,7 @@ def process_single_query(
     reasoning_effort,
     stream,
     timeout_s,
+    max_rpm=None,
 ):
     base_for_log = user_input
     if attack_method == ATTACK_CONTEXTUAL_JAILBREAK:
@@ -285,6 +282,7 @@ def process_single_query(
             reasoning_effort=reasoning_effort,
             stream=stream,
             timeout_s=timeout_s,
+            max_rpm=max_rpm,
         )
         user_input = rewrite_user_input(user_input, compat_client, model=model)
         print(f"Rewritten User Input: {user_input}")
@@ -304,6 +302,7 @@ def process_single_query(
             reasoning_effort=reasoning_effort,
             stream=stream,
             timeout_s=timeout_s,
+            max_rpm=max_rpm,
         )
         print(f"Response: {result}")
 
@@ -342,6 +341,7 @@ def main(
     reasoning_effort,
     stream,
     timeout_s,
+    max_rpm=None,
 ):
     if model is None:
         model = "mistralai/mistral-medium-3.5-128b"
@@ -369,6 +369,7 @@ def main(
                     reasoning_effort,
                     stream,
                     timeout_s,
+                    max_rpm=max_rpm,
                 )
         return
 
@@ -388,6 +389,7 @@ def main(
         reasoning_effort,
         stream,
         timeout_s,
+        max_rpm=max_rpm,
     )
 
 
@@ -434,7 +436,18 @@ if __name__ == "__main__":
         default=512,
         help="Hash embedding vector size.",
     )
-    parser.add_argument("--max_tokens", type=int, default=16384)
+    parser.add_argument(
+        "--max_tokens",
+        type=int,
+        default=4096,
+        help="Lower values reduce TPM-based 429 responses from NVIDIA.",
+    )
+    parser.add_argument(
+        "--max_rpm",
+        type=int,
+        default=None,
+        help="Max requests/minute throttle (default: NVIDIA_MAX_RPM env or module default).",
+    )
     parser.add_argument("--temperature", type=float, default=0.70)
     parser.add_argument("--top_p", type=float, default=1.00)
     parser.add_argument("--reasoning_effort", type=str, default="high")
@@ -458,4 +471,5 @@ if __name__ == "__main__":
         reasoning_effort=args.reasoning_effort,
         stream=args.stream,
         timeout_s=args.timeout_s,
+        max_rpm=args.max_rpm,
     )

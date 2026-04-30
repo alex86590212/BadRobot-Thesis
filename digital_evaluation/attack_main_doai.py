@@ -3,12 +3,11 @@ import json
 import os
 import re
 import sys
-import time
 from pathlib import Path
 
 import pandas as pd
-import requests
 
+from nvidia_api_rate_limit import post_chat_completions_with_limits
 from system_prompt import system_prompt
 from contextual_jailbreak import get_random_jailbreak_prompt
 from safety_misalignment import get_random_safety_misalignment_prompt
@@ -19,22 +18,10 @@ DEFAULT_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 ATTACK_CONTEXTUAL_JAILBREAK = "contextual jailbreak"
 ATTACK_SAFETY_MISALIGNMENT = "safety misalignment"
 ATTACK_CONCEPTUAL_DECEPTION = "conceptual deception"
-MAX_REQUESTS_PER_MINUTE = 40
-_MIN_REQUEST_INTERVAL_S = 60.0 / MAX_REQUESTS_PER_MINUTE
-_LAST_REQUEST_TS = 0.0
 
 
 def _safe_filename_token(value: str) -> str:
     return re.sub(r'[^A-Za-z0-9._-]+', "_", value.strip()) if value else "model"
-
-
-def _throttle_requests() -> None:
-    global _LAST_REQUEST_TS
-    now = time.monotonic()
-    wait_s = _MIN_REQUEST_INTERVAL_S - (now - _LAST_REQUEST_TS)
-    if wait_s > 0:
-        time.sleep(wait_s)
-    _LAST_REQUEST_TS = time.monotonic()
 
 
 def _append_nsg_gate_jsonl(
@@ -101,12 +88,13 @@ def _call_chat_completion(
     api_key,
     model,
     messages,
-    max_tokens=16384,
+    max_tokens=4096,
     temperature=0.70,
     top_p=1.00,
     reasoning_effort="high",
     stream=False,
     timeout_s=120,
+    max_rpm=None,
 ):
     headers = {
         "Content-Type": "application/json",
@@ -123,8 +111,13 @@ def _call_chat_completion(
         "stream": stream,
     }
 
-    _throttle_requests()
-    response = requests.post(base_url, headers=headers, json=data, timeout=timeout_s)
+    response = post_chat_completions_with_limits(
+        base_url,
+        headers=headers,
+        json_body=data,
+        timeout=timeout_s,
+        max_rpm=max_rpm,
+    )
     response.raise_for_status()
     if stream:
         chunks = []
@@ -166,12 +159,13 @@ def process_single_query(
     attack_method,
     output_file,
     nsg_gate_jsonl=None,
-    max_tokens=16384,
+    max_tokens=4096,
     temperature=0.70,
     top_p=1.00,
     reasoning_effort="high",
     stream=False,
     timeout_s=120,
+    max_rpm=None,
 ):
     """
     This function processes a single user input query with the selected attack method,
@@ -209,6 +203,7 @@ def process_single_query(
                             reasoning_effort=reasoning_effort,
                             stream=stream,
                             timeout_s=timeout_s,
+                            max_rpm=max_rpm,
                         )
                         return type(
                             "Resp",
@@ -248,6 +243,7 @@ def process_single_query(
             reasoning_effort=reasoning_effort,
             stream=stream,
             timeout_s=timeout_s,
+            max_rpm=max_rpm,
         )
         print(f"Response: {result}")
 
@@ -272,12 +268,13 @@ def main(
     attack_method,
     load_malicious_queries_flag,
     nsg_gate_jsonl=None,
-    max_tokens=16384,
+    max_tokens=4096,
     temperature=0.70,
     top_p=1.00,
     reasoning_effort="high",
     stream=False,
     timeout_s=120,
+    max_rpm=None,
 ):
     if model is None:
         model = "mistralai/mistral-medium-3.5-128b"
@@ -303,6 +300,7 @@ def main(
                     reasoning_effort=reasoning_effort,
                     stream=stream,
                     timeout_s=timeout_s,
+                    max_rpm=max_rpm,
                 )
         return
 
@@ -320,6 +318,7 @@ def main(
         reasoning_effort=reasoning_effort,
         stream=stream,
         timeout_s=timeout_s,
+        max_rpm=max_rpm,
     )
 
 
@@ -362,8 +361,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_tokens",
         type=int,
-        default=16384,
-        help="Maximum tokens for completion.",
+        default=4096,
+        help="Maximum tokens for completion (large values increase TPM rate limits).",
+    )
+    parser.add_argument(
+        "--max_rpm",
+        type=int,
+        default=None,
+        help="Sliding-window max requests/minute (default: NVIDIA_MAX_RPM env or built-in limit).",
     )
     parser.add_argument("--temperature", type=float, default=0.70)
     parser.add_argument("--top_p", type=float, default=1.00)
@@ -387,4 +392,5 @@ if __name__ == "__main__":
         reasoning_effort=args.reasoning_effort,
         stream=args.stream,
         timeout_s=args.timeout_s,
+        max_rpm=args.max_rpm,
     )

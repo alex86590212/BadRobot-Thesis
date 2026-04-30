@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-04-30T19:49:34.298636+00:00",
+  "dataset": "derek-thomas/ScienceQA",
+  "split": "test",
+  "num_examples": 500,
+  "model": "qwen/qwen3.5-122b-a10b",
+  "base_url": "https://integrate.api.nvidia.com/v1/chat/completions",
+  "blocked_policy": "incorrect",
+  "accuracy_no_gate": 0.86,
+  "accuracy_with_gate": 0.86,
+  "with_gate_scored_examples": 500,
+  "blocked_count": 0,
+  "blocked_rate": 0.0,
+  "parse_error_count": 500,
+  "parse_error_rate": 1.0,
+  "rules_path": "/Users/baris/projects/BadRobot-Thesis/experiments/neuro_symbolic_gate/rules/rsafety_v0.yaml",
+  "results_jsonl": "/Users/baris/projects/BadRobot-Thesis/experiments/neuro_symbolic_gate/outputs/scienceqa_doai_qwen_test.jsonl"
+}
