@@ -346,7 +346,8 @@ def main(
     if model is None:
         model = "mistralai/mistral-medium-3.5-128b"
 
-    output_file = f"{model}_{attack_method}_embedding_consistency_doai_results.txt"
+    safe_model = model.replace("/", "_").replace("\\", "_")
+    output_file = f"{safe_model}_{attack_method}_embedding_consistency_doai_results.txt"
 
     if load_malicious_queries_flag:
         malicious_queries = load_malicious_queries()
