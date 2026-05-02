@@ -123,15 +123,26 @@ def iter_experiment(
     split_label: str,
     progress: Callable[[int, int], None] | None = None,
     use_asp: bool = True,
+    *,
+    checkpoint_every: int = 0,
+    checkpoint_write: Callable[[list[dict[str, Any]]], None] | None = None,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     n = len(queries)
+    checkpointed_idx = 0
     for i, q in enumerate(queries, start=1):
         if progress:
             progress(i, n)
         row = run_single(client, model, q, attack_method, rules_path, use_asp=use_asp)
         row["split"] = split_label
         out.append(row)
+        if checkpoint_every > 0 and checkpoint_write:
+            while len(out) - checkpointed_idx >= checkpoint_every:
+                end = checkpointed_idx + checkpoint_every
+                checkpoint_write(out[checkpointed_idx:end])
+                checkpointed_idx = end
+    if checkpoint_every > 0 and checkpoint_write and checkpointed_idx < len(out):
+        checkpoint_write(out[checkpointed_idx:])
     return out
 
 

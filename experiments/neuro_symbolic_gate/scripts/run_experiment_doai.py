@@ -194,6 +194,12 @@ def main() -> None:
     parser.add_argument("--reasoning_effort", type=str, default="high")
     parser.add_argument("--stream", type=bool, default=False)
     parser.add_argument("--timeout_s", type=int, default=120)
+    parser.add_argument(
+        "--checkpoint_every",
+        type=int,
+        default=10,
+        help="Append --out after every N completed rows (0 = write entire file once at end).",
+    )
     args = parser.parse_args()
 
     if not args.api_key:
@@ -221,13 +227,29 @@ def main() -> None:
     def progress(i: int, n: int) -> None:
         print(f"\r[{i}/{n}]", end="", flush=True)
 
+    ce = max(0, args.checkpoint_every)
+
+    def flush_checkpoint_batch(rows: list[dict[str, Any]]) -> None:
+        with args.out.open("a", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            f.flush()
+
+    ck_kwargs: dict[str, Any] = {}
+    if ce > 0:
+        args.out.write_text("", encoding="utf-8")
+        ck_kwargs["checkpoint_every"] = ce
+        ck_kwargs["checkpoint_write"] = flush_checkpoint_batch
+
     all_rows: list[dict] = []
     if args.split in ("malicious", "both"):
         qs = load_malicious_queries(_REPO_ROOT)
         if args.limit:
             qs = qs[: args.limit]
         print(f"Malicious queries: {len(qs)}")
-        all_rows.extend(iter_experiment(client, args.model, qs, args.attack_method, rules_path, "malicious", progress))
+        all_rows.extend(
+            iter_experiment(client, args.model, qs, args.attack_method, rules_path, "malicious", progress, **ck_kwargs)
+        )
         print()
 
     if args.split in ("safe", "both"):
@@ -236,12 +258,15 @@ def main() -> None:
         if args.limit:
             qs = qs[: args.limit]
         print(f"Safe control queries: {len(qs)}")
-        all_rows.extend(iter_experiment(client, args.model, qs, args.attack_method, rules_path, "safe", progress))
+        all_rows.extend(
+            iter_experiment(client, args.model, qs, args.attack_method, rules_path, "safe", progress, **ck_kwargs)
+        )
         print()
 
-    with args.out.open("w", encoding="utf-8") as f:
-        for row in all_rows:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    if ce == 0:
+        with args.out.open("w", encoding="utf-8") as f:
+            for row in all_rows:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
     print(f"Wrote {len(all_rows)} records to {args.out.resolve()}")
 
 
